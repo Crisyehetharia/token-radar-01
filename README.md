@@ -26,27 +26,39 @@ Entry for the [token-radar-01 bounty](https://make.fun/bounty/token-radar-01) on
 The program is deterministic: same snapshot in, same bytes out, every run. No network,
 no clock, no randomness.
 
-## The model ("radar-2")
+## The model ("radar-3")
 
 ```
 implied = round( tvl_usd × multiple(category)
-                 × (1 + clamp(change_7d, -60, 120) / 100 × 0.5)
-                 × (0.6 + min(age_days, 1095) / 1095 × 0.4) )
+                 × (1 + clamp(change_7d, -80, 150) / 100 × 0.6 up / 0.8 down)
+                 × (0.65 + 0.35 × (1 - exp(-age_days / 365)))
+                 × (1 + 0.03 × min(chains - 1, 5)) )
 ```
 
 - **multiple(category)** — the median market-cap-per-TVL of the live-token protocols in
-  the same category, read from this snapshot (a category with fewer than 3 live
-  protocols uses the overall median of ×0.241); clamped to ×0.05–×1.00.
-- **growth** — the protocol's seven-day TVL change, clamped to −60…+120%.
+  the same category, shrunk toward the overall median with a prior worth 5 protocols:
+  `(n × category median + 5 × overall median) / (n + 5)`, so a small category cannot
+  price itself on a handful of samples. A category with fewer than 3 live protocols
+  uses the overall median outright (×0.241) — one protocol's ratio can never set the
+  price for a whole category (one live Prediction Market protocol sits at ×400);
+  clamped to ×0.05–×1.00.
+- **growth** — the protocol's seven-day TVL change, clamped to −80…+150%. A fall
+  weighs 0.8 per point against a rise at 0.6: TVL leaving is a stronger warning
+  than TVL arriving is a promise.
 - **maturity** — how long it has run with no token (age since first listing, unknown
-  age = 365 days), from ×0.6 for a new protocol to ×1.0 after three years.
+  age = 365 days), from ×0.65 for a new protocol, saturating toward ×1.0: age
+  matters most in the first year, then flattens.
+- **reach** — the chains the protocol runs on: ×1.00 on one chain, +×0.03 per
+  extra chain up to ×1.15 on six or more. More chains means more users for the
+  token to reach.
 - **Early radar** — every rankable pre-token protocol below the watchlist floor
   (wrapped/staked products and CEXes excluded).
 - **Live-token protocols** are set aside with their market caps shown — they are facts,
   not a model.
 
-Every row carries a **7-step farm plan** (fresh wallet, main action for its category,
-second action, weekly action, hold period, safe claim, farm log), each step with a cost
+Every row carries an **8-step farm plan** (fresh wallet, main action for its category,
+second action, a weekly action for its category, hold period, safe claim, farm log,
+and a monthly re-check of the row against this board), each step with a cost
 and a time. The dashboard recomputes each row's implied value from the snapshot figures,
 so the page's code and the board's data are visibly the same arithmetic.
 

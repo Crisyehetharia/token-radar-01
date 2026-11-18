@@ -32,9 +32,11 @@
   }
   function fmtMult(n) { return 'x' + n.toFixed(2); }
 
-  // The calibration, recomputed here from the live-token protocols data.js carries: the median
-  // market-cap-per-TVL of each category, falling back to the overall median, clamped to the
-  // model's band. This is the same arithmetic main.ts ran; the table below shows what it found.
+  // The calibration, recomputed here from the live-token protocols data.js carries: each
+  // category with at least three live protocols gets its median market-cap-per-TVL, shrunk
+  // toward the overall median with a prior worth five protocols, so a small category cannot
+  // set the price for itself on a handful of samples; thinner categories use the overall
+  // median. This is the same arithmetic main.ts ran; the table below shows what it found.
   function median(values) {
     if (!values.length) return 0;
     var s = values.slice().sort(function (a, b) { return a - b; });
@@ -55,25 +57,31 @@
     Object.keys(byCat).sort().forEach(function (c) {
       var rs = byCat[c];
       out[c] = rs.length >= m.min_live_samples
-        ? { multiple: Math.min(m.multiple_cap, Math.max(m.multiple_floor, median(rs))), n: rs.length, fallback: false }
+        ? { multiple: Math.min(m.multiple_cap, Math.max(m.multiple_floor, (rs.length * median(rs) + m.shrinkage_prior * overall) / (rs.length + m.shrinkage_prior))), n: rs.length, fallback: false }
         : { multiple: overall, n: rs.length, fallback: true };
     });
     return { byCategory: out, overall: overall, overallN: all.length };
   }
   var CALIB = calibration();
 
-  // The model in one function: TVL times the category multiple, times growth, times maturity.
+  // The model in one function: TVL times the shrunk category multiple, times growth (a fall
+  // weighs more than a rise), times maturity (diminishing with age), times chain reach.
   function multipleOf(row) {
     var e = CALIB.byCategory[row.category || 'Other'];
     return e ? e.multiple : CALIB.overall;
   }
+  function reachOf(row) {
+    var m = DATA.model;
+    var extra = Math.min(Math.max((row.chains || []).length - 1, 0), m.chain_max_steps);
+    return 1 + extra * m.chain_step;
+  }
   function impliedOf(row) {
     var m = DATA.model;
     var growth = Math.min(m.growth_cap, Math.max(m.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
-    var growthMult = 1 + (growth / 100) * m.growth_weight;
+    var growthMult = 1 + (growth / 100) * (growth >= 0 ? m.growth_weight_pos : m.growth_weight_neg);
     var age = row.age_days === null || row.age_days === undefined ? m.unknown_age_days : row.age_days;
-    var maturity = m.maturity_floor + (Math.min(Math.max(age, 0), m.maturity_days) / m.maturity_days) * m.maturity_range;
-    return Math.max(1, Math.round(row.tvl_usd * multipleOf(row) * growthMult * maturity));
+    var maturity = m.maturity_floor + m.maturity_range * (1 - Math.exp(-Math.max(age, 0) / m.maturity_scale_days));
+    return Math.max(1, Math.round(row.tvl_usd * multipleOf(row) * growthMult * maturity * reachOf(row)));
   }
 
   function el(tag, attrs) {
@@ -138,6 +146,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'multiple') { av = a.category_multiple; bv = b.category_multiple; }
+      else if (key === 'reach') { av = a.chain_multiplier; bv = b.chain_multiplier; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -160,7 +169,7 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.watchlist_size + ' watchlist protocols, ranked by implied value' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor. Implied value is a model, not a promise: TVL times the live market multiple for its category, times growth, times maturity.' })
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor. Implied value is a model, not a promise: TVL times the live market multiple for its category, times growth, times maturity, times the chains it reaches.' })
       ),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
@@ -179,7 +188,7 @@
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
-    var search = el('input', { type: 'search', id: 'q', placeholder: 'Search name, category or chain', value: state.q, 'aria-label': 'Search the board' });
+    var search = el('input', { type: 'search', id: 'q', placeholder: 'Search the board', value: state.q, 'aria-label': 'Search the board' });
     search.addEventListener('input', function () { state.q = search.value; writeHash(); render(); });
     var catSel = el('select', { id: 'category', 'aria-label': 'Filter by category' }, selectOptions(categories, state.category, 'All categories'));
     catSel.addEventListener('change', function () { state.category = catSel.value; writeHash(); render(); });
@@ -236,6 +245,7 @@
         el('td', { class: 'num ' + growthClass, text: growth }),
         el('td', { class: 'num', text: fmtAge(r.age_days) }),
         el('td', { class: 'num', text: fmtMult(r.category_multiple) }),
+        el('td', { class: 'num', text: fmtMult(r.chain_multiplier) }),
         el('td', null, el('div', { class: 'implied' },
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
@@ -255,6 +265,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('multiple', 'Multiple'),
+            sortHeader('reach', 'Reach'),
             sortHeader('implied', 'Implied value'),
             el('th', { scope: 'col', text: 'Token' })
           )),
@@ -301,9 +312,9 @@
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x multiple(category) x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'implied = round( tvl_usd x multiple(category) x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight_pos + ' up / ' + m.growth_weight_neg + ' down) x (' + m.maturity_floor + ' + ' + m.maturity_range + ' x (1 - exp(-age_days / ' + m.maturity_scale_days + '))) x (1 + ' + m.chain_step + ' x min(chains - 1, ' + m.chain_max_steps + ')) )'
       ),
-      el('p', { class: 'sub', text: 'The multiple is the median market-cap-per-TVL of the live-token protocols in the same category, read from this snapshot; a category with fewer than ' + m.min_live_samples + ' live protocols uses the overall median of ' + fmtMult(CALIB.overall) + ' (n=' + CALIB.overallN + '). Multiples are clamped to ' + m.multiple_floor + '–' + m.multiple_cap + '. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, and the live-token protocols are set aside with their market caps shown.' }),
+      el('p', { class: 'sub', text: 'The multiple is the median market-cap-per-TVL of the live-token protocols in the same category, shrunk toward the overall median of ' + fmtMult(CALIB.overall) + ' (n=' + CALIB.overallN + ') with a prior worth ' + m.shrinkage_prior + ' protocols, so a small category cannot price itself on a handful of samples; a category with fewer than ' + m.min_live_samples + ' live protocols uses the overall median outright, so one protocol\'s ratio can never set the price for a whole category. Multiples are clamped to ' + m.multiple_floor + '–' + m.multiple_cap + '. A seven-day fall weighs ' + m.growth_weight_neg + ' per point against a rise at ' + m.growth_weight_pos + ', because TVL leaving is a stronger warning than TVL arriving is a promise. Age is the time since the protocol was first listed, the best record of how long it has run with no token; it matters most in the first year and then saturates, and an unlisted age uses ' + m.unknown_age_days + ' days. Reach adds ' + m.chain_step + ' per chain past the first, up to ' + m.chain_max_steps + ' extra chains: a protocol on more chains reaches more users. The early radar is every pre-token protocol below the watchlist floor, and the live-token protocols are set aside with their market caps shown.' }),
       el('table', { class: 'calib' },
         el('caption', { class: 'sub', text: 'Calibrated multiples by category (recomputed on this page from the live-token protocols).' }),
         el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', class: 'num', text: 'Multiple' }), el('th', { scope: 'col', class: 'num', text: 'Live protocols' }))),
@@ -340,6 +351,7 @@
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
+        el('div', null, el('span', { text: 'Chain reach' }), el('b', { class: 'num', text: String(row.chain_multiplier) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
         el('div', null, el('span', { text: 'Recomputed on this page' }), el('b', { class: 'num', text: fmtUsd(recomputed) }))
       ),

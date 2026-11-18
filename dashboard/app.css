@@ -94,14 +94,14 @@ td .name .sub, .sub { color: var(--muted); font-size: 12.5px; }
 .detail-head h2 { margin: 2px 0 4px; font-size: 23px; }
 .detail-head .brand-name { color: var(--accent); font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
 .close { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; height: fit-content; }
-.detail-section { padding: 14px 20px 20px; }
+.detail-section { padding: 12px 20px 16px; }
 .detail-section h3 { margin: 0 0 10px; font-size: 15px; }
 .equation { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
 .equation div { display: flex; justify-content: space-between; gap: 10px; }
 .equation span { color: var(--muted); }
 .equation .num { font-variant-numeric: tabular-nums; }
 .steps { margin: 0; padding-left: 20px; }
-.steps li { margin-bottom: 10px; }
+.steps li { margin-bottom: 8px; }
 .steps li b { display: block; font-weight: 600; }
 .steps .cost { color: var(--muted); font-size: 13px; }
 .note { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
